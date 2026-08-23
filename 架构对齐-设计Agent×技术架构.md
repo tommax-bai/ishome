@@ -133,7 +133,7 @@ flowchart LR
 ### 3.1 集成形态与 activity 归属
 
 - **genpipe-svc 职责不变**：Temporal workflow 编排、发布门禁状态机，两台引擎的生成链路仍由 genpipe workflow 串起（上层聚合）。
-- **绘图服务 = 独立部署的 Temporal worker 服务**：各自监听专属 task queue（`render2d` / `imagegen` / `render3d`），无对外 RPC 端口、无数据库 schema、无状态（算完即焚，产物写 OSS + 注册 ArtifactRegistry）。重试/心跳/取消/背压沿用 Temporal activity 原生语义，**不引入服务间 HTTP 调用**。
+- **绘图服务 = 独立部署的 Temporal worker 服务**：各自监听专属 task queue（`render2d-activities` / `imagegen-activities` / `render3d-activities`，沿 `genpipe-activities` 既有惯例；权威名单=contracts `registries/task_queues.md`，2026-08-23 深夜落定后本处回改），无对外 RPC 端口、无数据库 schema、无状态（算完即焚，产物写 OSS + 注册 ArtifactRegistry）。重试/心跳/取消/背压沿用 Temporal activity 原生语义，**不引入服务间 HTTP 调用**。
 - **genpipe-worker 保留非绘图 activity**：解析、求解、校验、门禁与 3D 资产加工。
 - **契约**：绘图 activity 注册名与输入输出 schema 在 ishome-contracts activity 注册表版本化管理（既有机制），跨仓接口变更走 contracts 发版流程。
 - 工厂线/交互线**复用同一实现**的原则不变（复用落在服务级）。
