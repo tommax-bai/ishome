@@ -1,6 +1,6 @@
 # 《是我的家》架构对齐文档：设计 Agent 方案 × 技术架构方案
 
-> 版本：V1.4（V1.1 增补决策五：IM 主通道与可插拔渠道层，首发飞书；V1.2 增补决策六：第一阶段视觉模板体系融合；**V1.3 裁决：系统无人工介入环节**——人审门/结构复核/抽检/转人工全部移除，决策三整体重写；设计只面向把系统做好用，不面向责任划分，责任话题以入口服务声明一次性了结，不进入设计讨论；**V1.4 裁决（2026-08-23）：绘图能力物理拆分**——推翻"不新建渲染服务"口径，绘图 activity 按绘图逻辑拆为三个独立服务、独立仓库（render2d / imagegen / render3d），genpipe 保留编排与非绘图 activity，决策二重写）
+> 版本：V1.4（V1.1 增补决策五：IM 主通道与可插拔渠道层，首发飞书；V1.2 增补决策六：第一阶段视觉模板体系融合；**V1.3 裁决：系统无人工介入环节**——人审门/结构复核/抽检/转人工全部移除，决策三整体重写；设计只面向把系统做好用，不面向责任划分，责任话题以入口服务声明一次性了结，不进入设计讨论；**V1.4 裁决（2026-08-23）：绘图能力物理拆分**——推翻"不新建渲染服务"口径，绘图 activity 按绘图逻辑拆为三个独立服务、独立仓库（render2d / imagegen / render3d），genpipe 保留编排与非绘图 activity，决策二重写；**V1.5 裁决（2026-08-23）：design-svc 一拆为二 + 里程碑引擎事件驱动**——chat-svc（Python 会话引擎）+ project-svc（Java 项目状态机），设计项目长周期 Temporal workflow 作废、Temporal 收缩至任务层，《沟通助手架构方案》v0.3 收录为会话域基线文档，决策一重写。文中未逐处改写的"design-svc"字样按拆分对照理解：会话职责→chat-svc，状态/任务职责→project-svc）
 > 日期：2026-08-22
 > 输入文档：《装修设计 Agent 架构方案》（现 V1.3，下称 **Agent 方案**）、《AI装修效果图产品·技术架构方案》（下称 **技术架构**）、《第一阶段视觉提案与 Prompt 说明》（下称 **视觉提案**）
 > 文档性质：两份基线文档的拼接层。不重复两边已定的内容，只解决"缝"：交互式 Agent 的服务落点、深度设计链路补全、两道门的统一、数据与事件契约映射。
@@ -43,9 +43,10 @@ flowchart LR
         TW["模板验收台<br/>(admin-bff，设计时)"] -.模板上线.-> GP
     end
     subgraph demand["交互设计引擎（需求侧）"]
-        CH["channel-svc<br/>IM渠道网关(可插拔)"] --> DS["design-svc<br/>Orchestrator/ProjectState"]
-        CB["c-bff<br/>H5指图时刻"] --> DS
-        DS --> GP
+        CH["channel-svc<br/>IM渠道网关(可插拔)"] --> CS["chat-svc<br/>会话引擎/记忆/承诺区"]
+        CB["c-bff<br/>H5指图时刻"] --> CS
+        CS -- "结构化业务事实" --> PS["project-svc<br/>里程碑引擎/项目真相"]
+        PS --> GP
     end
     subgraph render["绘图服务（V1.4：独立仓/独立部署，两台引擎复用）"]
         R2["render2d-svc<br/>确定性2D制图"]
@@ -55,51 +56,61 @@ flowchart LR
     GP --> R2
     GP --> IG
     GP --> R3
-    CT -- "认领即分叉" --> DS
-    DS -- "排产信号" --> ES
-    DS -- "交付与召回" --> CH
+    CT -- "认领即分叉" --> PS
+    PS -- "排产信号" --> ES
+    PS -- "产物就绪事件" --> CS
+    CS -- "交付与召回" --> CH
 ```
 
 ---
 
-## 二、决策一：交互式设计 Agent 落点 = 新增 design-svc（第 11 个服务）
+## 二、决策一（V1.5 重写）：交互式设计 Agent = chat-svc + project-svc 两服务
+
+### 2.0 V1.5 裁决：design-svc 一拆为二
+
+原 V1.0–V1.4 口径为单一 design-svc 同时持有会话编排与 ProjectState。**2026-08-23 用户裁决拆分**，判据与绘图拆分（V1.4）同源——逻辑异质必须物理隔离：
+
+- **会话层**：LLM 驱动的模糊逻辑（理解/情绪/记忆/话术），每句话都不一样；
+- **项目层**：确定性状态机（里程碑/槽位真相/修订预算），零模型自由度——项目不能被模型"聊丢方向"。
+
+拆分时机：ProjectState 尚未落库（路线图数据层未执行），零迁移成本。会话域机制基线 = **《沟通助手架构方案》v0.3**（同日收录，其三层架构 D8 与本裁决同构；其服务拓扑按本节归位）。
 
 ### 2.1 服务定义
 
-| 项 | 内容 |
+| 项 | chat-svc | project-svc |
+|---|---|---|
+| 名称 | `{code}-chat-svc` | `{code}-project-svc` |
+| 职责 | 对话全流程：意图/情绪/槽位与反馈抽取、封闭动作集决策（受当前里程碑裁剪）、产物呈现与反馈映射、记忆三层与画像五区、承诺区、主动消息引擎（现 design-svc Orchestrator v1 演进而来，代码保留） | 项目状态机与里程碑引擎（事件驱动 checkCompletion）、slot/artifact/generation_task/revision 唯一真相、生成任务创建与编排、修订预算判定、流程定义权威分发（process_version 项目创建时固化） |
+| 语言 | Python（沿用 aipipe 现 design-svc 代码；LangGraph 静态图 + LiteLLM + Langfuse） | Java/Spring（并入 ishome-backend monorepo） |
+| 存储 | PG schema `svc_chat` + Redis 会话态 | PG schema `svc_project` |
+| 明确不做 | 不判里程碑、不建生成任务、不持产物本体（只持引用）、无装修领域硬编码（领域知识来自流程定义配置） | 不理解自然语言、不执行生成；**支付与权益不进本服务**（归 trade-svc，资金路径故障域纪律） |
+
+服务存在性判据：chat-svc 继承原 design-svc 的会话式 LLM 负载伸缩轴；project-svc 是业务域标准 CRUD/状态机形态（与 Java 侧同构）；两者故障域隔离——模型抖动不伤项目真相，排产高峰不挤占会话。
+
+**边界一句话：chat-svc 管听懂和说话，project-svc 管事实和规则，genpipe 管编排管线，绘图服务管画图算力。** 链路单向：chat 产出结构化业务事实（slot_filled / artifact_confirmed / feedback_received）→ project-svc 判定并创建任务 → genpipe workflow 派发 worker 与绘图服务 → 产物登记 → 事件 → chat 呈现。**chat 与绘图服务永不直接交互；chat 永不判里程碑。**
+
+### 2.2 概念 → 技术组件映射（V1.5 更新）
+
+| 概念（Agent 方案 / v0.3） | 技术落点 |
 |---|---|
-| 名称 | `{code}-design-svc` |
-| 职责 | Design Orchestrator、Intent Router、确认闭环、结构化 Patch 引擎、ProjectState 唯一属主、设计项目 Temporal 工作流 |
-| 语言 | Python（AI 团队所有权，与 genpipe 同班底、同 monorepo） |
-| 存储 | Postgres schema `svc_design`（遵守禁止跨 schema join 纪律） |
-
-按技术架构的**服务存在性判据**逐条回答（三条满足其一即可，design-svc 三条全中）：
-
-- **伸缩轴独立**：会话式、LLM 调用密集、长连接/轮询负载，与 genpipe 的批量算力形态和 Java 业务服务的 CRUD 形态都不同。
-- **故障域独立**：设计会话挂掉不应影响内容消费（content）和资金路径（trade）；反之内容工厂排产高峰不应挤占用户会话。
-- **团队所有权独立**：AI 团队所有，与 genpipe 同队但生命周期不同——genpipe 是"把东西算出来"的管线，design-svc 是"这个家该怎么设计"的状态与决策。
-
-**边界一句话：design-svc 管状态和决策，genpipe 管编排和管线，绘图服务管画图算力（V1.4，见 §三）。** design-svc 不跑重计算（解析、布局下发 genpipe activities，绘图下发三个独立绘图服务的 activities，均经 Temporal 工作流）；genpipe 与绘图服务均不持有项目状态（算完即焚，结果写回 design-svc）。
-
-### 2.2 Agent 方案概念 → 技术组件映射
-
-| Agent 方案（V1.1） | 技术落点 |
-|---|---|
-| Workflow Graph（§9） | **Temporal workflow**（design 独立 namespace）。设计项目 = 一个长周期 workflow（可跨月，continue-as-new）；用户确认、进入深度设计 = signal；阶段门 = workflow 内状态（硬证据校验为机检节点，V1.3 起无人工 signal）。V1.1 要求的"任意节点可暂停恢复、中断后按最后事件继续"正是 Temporal 的原生语义，不自研状态机——与技术架构 2.3 的结论一致。 |
-| Design Orchestrator / Intent Router | design-svc 内进程组件，LLM 经 **LiteLLM 网关**调用，**Langfuse** 逐会话记成本（单项目 token 成本是经济账输入变量，与单图成本同列） |
-| ProjectState（§7） | `svc_design` schema，见 §5.1 表结构 |
-| 确认闭环（§8.2） | workflow 节点 + c-bff 看图点错交互；确认动作回 signal |
-| 结构化 Patch（§11） | design-svc patch 引擎：校验（调 genpipe 规则 activity）→ 写新 revision → outbox 发事件 → 触发受影响产物重算 |
-| 交付图集 / 模板库（§4、§10） | genpipe 编排 + 绘图服务 activities（见 §3.1），design-svc 传入 PreliminaryPlan Revision + 模板声明，产物注册回 ArtifactRegistry |
-| Scene Graph（§6.3） | `svc_design.scenes`（JSONB）+ OSS 场景包（编译产物，如 glTF），见 §3.2 |
+| 里程碑状态机（v0.3 §7 / V1.1 Workflow Graph §9） | **project-svc 里程碑引擎：事件驱动，真相在表**——每处理完影响判据的事件并落库后执行 checkCompletion（读判据配置→查 slot/artifact 表→布尔求值→迁移+on_enter 编排）。**V1.5 裁决：原"设计项目=长周期 Temporal workflow（continue-as-new）"方案作废，Temporal 收缩至任务层**（生成管线 workflow/activity，重试/心跳/超时用原生语义）。不搞定时轮询；对话连续性由外置状态承载，不用框架挂起 |
+| Design Orchestrator / 会话层轮内工作流（v0.3 §8） | chat-svc 内 LangGraph 静态图：理解（并行）→状态装载→封闭动作集决策→执行（校验回路）→写回投递；LLM 经 **LiteLLM 网关**，观测与成本 = **Langfuse**（不引入 LangSmith） |
+| ProjectState（§7） | `svc_project` schema，见 §5.1 表结构 |
+| 确认闭环（§8.2） | chat 识别"确认"为业务事实 → artifact_confirmed 事件 → project-svc 落库触发里程碑引擎；认知状态六值沿 contracts 既定（user_confirmed 仅确认闭环授予）+ c-bff 看图点错交互 |
+| 结构化 Patch / 修订循环（§11 / v0.3 时序B） | chat 受限映射（修订维度词表枚举校验，LLM 自创值不采纳→追问澄清）→ feedback_received{target, dimension, direction} → project-svc 修订预算判定 → revision task（base 版本参数+指令）→ 增量重算 |
+| 流程定义配置（v0.3 D10） | 版本化配置制品归业务域、随 monorepo 评审；project-svc 权威分发（`GET /process-definitions/{version}`）；chat 消费槽位 schema/词表/动作白名单/prompt 片段，project 消费判据/编排/预算；**配置只放数据，逻辑归服务** |
+| 交付图集 / 模板库（§4、§10） | genpipe 编排 + 绘图服务 activities（见 §3.1），project-svc 传入版本参数与模板声明，产物注册回 artifact 表 |
+| 记忆/画像/承诺区（v0.3 §10-11） | chat-svc：三层记忆（工作/情景 pgvector/语义画像五区）；承诺白名单=自动化能力清单，兑现率恒 100%；**挂任务承诺以任务事件核销，不自扫 deadline**（到期真相在任务层） |
+| Scene Graph（§6.3） | `svc_project.scenes`（JSONB）+ OSS 场景包（编译产物，如 glTF），见 §3.2 |
 
 ### 2.3 交互通道与延迟形态
 
 **IM 为项目主线程，H5 承接富交互**（详见 §六 决策五）：
 
-- IM 渠道 → channel-svc → design-svc：会话消息、快速确认、图片上传、文本反馈。
-- c-bff（H5）→ design-svc：看图点错、三图对比标注、材质风格选择、3D 查看等"指图时刻"。
-- 生成任务：design-svc 发起 Temporal 子工作流立即返回；完成后经会话渠道**直接把图发进聊天线程**（"你的三张方案图好了"），无主动发送窗口时降级为触达级渠道（订阅消息/短信）召回。分钟级异步生成与 IM 的异步消息形态天然匹配，用户无需守在会话里等。
+- IM 渠道 → channel-svc → chat-svc：会话消息、快速确认、图片上传、文本反馈。**chat 定投递策略（分段/打字延迟/时段调度），channel-svc 按能力声明执行**（quick_reply 降级同理）。
+- c-bff（H5）→ chat-svc：看图点错、三图对比标注、材质风格选择、3D 查看等"指图时刻"；产生的业务事实同样发往 project-svc。
+- 生成任务：project-svc 创建任务并启动 genpipe Temporal workflow 立即返回；完成事件经 chat 主动消息引擎**直接把图发进聊天线程**（"你的三张方案图好了"），无主动发送窗口时降级为触达级渠道（订阅消息/短信）召回。分钟级异步生成与 IM 的异步消息形态天然匹配，用户无需守在会话里等。
+- 失败路径显式（v0.3 §9）：Temporal 重试耗尽 → task_failed 事件 → chat 诚实告知+改期（一次为限）→ 二次失败走边界声明，里程碑不迁移，缺口遥测。任务超时由 Temporal timeout 兜底，无手工 deadline 扫描。
 
 ---
 
@@ -168,7 +179,7 @@ flowchart LR
 | 门 | 触发方 | 形态 | 通过动作 |
 |---|---|---|---|
 | 机检门禁 | genpipe 工厂管线 / design-svc 交互产物 | consistency-check + compliance-check + scorer 阈值，**全自动** | 达标 → 发布/交付；不达标 → 自动重生成或换模板 |
-| 用户确认门 | design-svc 确认闭环 | 用户看图确认（当事人校验，产品流程的一部分） | signal → design workflow 进入设计 |
+| 用户确认门 | chat 识别确认 → project-svc 落 artifact_confirmed | 用户看图确认（当事人校验，产品流程的一部分） | 事件触发里程碑引擎 checkCompletion → 迁移并执行 on_enter（V1.5：无 workflow signal） |
 | 结构门 | design-svc（方案涉及结构改动） | 硬证据机检：户型库结构数据优先，其次用户上传图纸 | 校验通过 → 继续；无证据 → 自动降级为不动结构方案 |
 | 模板验收 | 运营上线新模板（**设计时动作，非运行时环节**） | 模板验收台（admin-bff）：样张对比、验收/打回 | 模板发布进模板库 |
 
@@ -178,21 +189,34 @@ flowchart LR
 
 ## 五、决策四：数据与事件契约映射
 
-### 5.1 ProjectState → svc_design 表结构
+### 5.1 项目真相与会话数据表结构（V1.5：svc_design 拆为 svc_project + svc_chat）
 
 ```text
-svc_design.projects            # projectId, userId(identity), phase, 户型引用(estate floorplanId 或私有上传)
-svc_design.project_revisions   # 版本快照(JSONB) + 产生它的 patch(JSONB) + reason + 来源
-svc_design.facts               # BaseFacts/深度数据；列含 status(认知状态六值)/source/confidence/stage
-                               # —— V1.1 §8.1 的 JSON 示例直接落列，枚举存字符串（对齐 6.4 数据纪律）
-svc_design.decisions           # UserDecisions：确认/否决/阶段进入，含确认事件引用
-svc_design.scenes              # Scene Graph JSONB，绑定 deep revision
-svc_design.artifacts           # ArtifactRegistry：type/revision/viewSpecVersion/dependsOn/OSS key
-svc_design.open_questions      # 确认清单与深度提问
-svc_design.outbox              # 本地事务 + outbox（对齐 2.6 纪律）
+# project-svc（Java）—— 项目唯一真相
+svc_project.projects           # id, user_id(identity), current_milestone, process_version, status,
+                               # 户型引用(estate floorplanId 或私有上传)
+svc_project.slots              # 槽位真相：slot_key/value/status(认知状态六值)/source_event_id/confidence/stage
+                               # —— 吸收原 svc_design.facts；V1.1 §8.1 JSON 示例直接落列，枚举存字符串
+svc_project.artifacts          # ArtifactRegistry：milestone/type/version/storage_url/gen_params/lineage/
+                               # status(generated|presented|confirmed|rejected)/viewSpecVersion/dependsOn
+svc_project.generation_tasks   # 生成任务业务真相：type/input_snapshot/status/artifact_id
+                               # （执行、重试、超时语义在 Temporal，此表只记业务事实）
+svc_project.revision_log       # 修订记录：milestone/round_no/directive(结构化)/task_id——修订预算判定依据
+svc_project.decisions          # UserDecisions：确认/否决/里程碑进入，含确认事件引用
+svc_project.scenes             # Scene Graph JSONB，绑定 deep revision
+svc_project.open_questions     # 确认清单与深度提问
+svc_project.outbox             # 本地事务 + outbox（对齐 2.6 纪律）
+
+# chat-svc（Python）—— 会话与记忆
+svc_chat.conversations / messages   # 会话与消息原文
+svc_chat.user_profiles              # 画像五区：事实/偏好/承诺/沟通风格/情绪模式（存模式不存状态）
+svc_chat.episodic_memories          # 情景记忆：会话结束触发摘要，结构化表 + pgvector（不用原始聊天记录做 RAG）
+svc_chat.commitments                # 承诺区：类型/内容/deadline/履约动作/状态/关联 task_id
+                                    # 挂任务承诺以任务事件核销，不自扫 deadline
+# 会话态（阶段/情绪轨迹/槽位缓存）在 Redis；槽位真相唯一在 svc_project.slots，chat 仅缓存用于组装上下文
 ```
 
-主键 ULID、UTC、软删、金额无涉——全部继承技术架构 6.4。
+主键 ULID、UTC、软删、金额无涉——全部继承技术架构 6.4。画像只存跨项目个人特征，项目档案归 svc_project；一个用户可多项目。
 
 ### 5.2 V1.1 事件 → CloudEvents 映射
 
@@ -219,11 +243,11 @@ svc_design.outbox              # 本地事务 + outbox（对齐 2.6 纪律）
 
 ### 5.3 contracts 仓新增
 
-- `proto/{code}/design/v1/`：design-svc gRPC（会话、确认、Patch、项目查询）。
+- `proto/{code}/design/v1/`：design-svc gRPC（会话、确认、Patch、项目查询）。**V1.5 注**：契约域名与 DesignService 入口不动（channel 转发目标即它），部署承接方为 chat-svc；project 域接口（槽位/产物/任务/流程定义分发）是否独立 proto 包，建服务时定〔开放〕。
 - OpenAPI：c-bff 新增 design 相关端点（snake_case 端到端纪律不变）。
 - 事件 schema：上表 CloudEvents 全部入注册表。
 - 错误码域：`DESIGN_xxx`。
-- monorepo 变化：`aipipe/` 从 `orchestrator、workers…` 调整为 `services/{genpipe-svc, genpipe-worker, design-svc}` + `packages/{scoring, adapters, patch-engine}`。**V1.4 追加**：绘图 activity 不在 aipipe 内——`ishome-render2d` / `ishome-imagegen` / `ishome-render3d` 三个独立仓库各承载一个绘图服务（见 §三），aipipe 中既有绘图 activity 存根迁出。
+- monorepo 变化：`aipipe/` 从 `orchestrator、workers…` 调整为 `services/{genpipe-svc, genpipe-worker, design-svc}` + `packages/{scoring, adapters, patch-engine}`。**V1.4 追加**：绘图 activity 不在 aipipe 内——`ishome-render2d` / `ishome-imagegen` / `ishome-render3d` 三个独立仓库各承载一个绘图服务（见 §三），aipipe 中既有绘图 activity 存根迁出。**V1.5 追加**：aipipe 的 `design-svc` 目录更名 `chat-svc`（Orchestrator 代码保留）；project 域为 Java 服务，落 ishome-backend monorepo 新增 `project-svc` 模块。
 
 ---
 
@@ -382,4 +406,4 @@ IM 输入比表单脏得多：语音、连发多条、混合意图、转发的�
 
 ## 十、一句话总结
 
-> 内容工厂负责把户型库填满（供给），design-svc 负责把命中的用户接进私有设计项目（需求），channel-svc 让这场设计对话发生在用户已经在的任何 IM 里；两边共用 genpipe 的编排管线、三个独立绘图服务的画图算力（render2d/imagegen/render3d，V1.4 物理拆分）、Temporal 的编排、同一套机检门禁和同一套事件契约。运行时无任何人工环节——用户侧收集并确认信息，其余全部靠系统迭代。新增四个服务（design + 三绘图）、升格一个服务、零个新中间件，其余全部是既有组件的复用与扩展。
+> 内容工厂负责把户型库填满（供给），chat-svc 听懂用户并替系统说话，project-svc 掌管项目事实与里程碑（需求侧，V1.5 拆分），channel-svc 让这场设计对话发生在用户已经在的任何 IM 里；两边共用 genpipe 的编排管线、三个独立绘图服务的画图算力（render2d/imagegen/render3d，V1.4 物理拆分）、任务层的 Temporal、同一套机检门禁和同一套事件契约。运行时无任何人工环节——用户侧收集并确认信息，其余全部靠系统迭代。新增五个服务（chat + project + 三绘图）、升格一个服务、零个新中间件，其余全部是既有组件的复用与扩展。
