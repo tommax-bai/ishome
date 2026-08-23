@@ -1,6 +1,6 @@
 # 《是我的家》架构对齐文档：设计 Agent 方案 × 技术架构方案
 
-> 版本：V1.3（V1.1 增补决策五：IM 主通道与可插拔渠道层，首发飞书；V1.2 增补决策六：第一阶段视觉模板体系融合；**V1.3 裁决：系统无人工介入环节**——人审门/结构复核/抽检/转人工全部移除，决策三整体重写；设计只面向把系统做好用，不面向责任划分，责任话题以入口服务声明一次性了结，不进入设计讨论）
+> 版本：V1.4（V1.1 增补决策五：IM 主通道与可插拔渠道层，首发飞书；V1.2 增补决策六：第一阶段视觉模板体系融合；**V1.3 裁决：系统无人工介入环节**——人审门/结构复核/抽检/转人工全部移除，决策三整体重写；设计只面向把系统做好用，不面向责任划分，责任话题以入口服务声明一次性了结，不进入设计讨论；**V1.4 裁决（2026-08-23）：绘图能力物理拆分**——推翻"不新建渲染服务"口径，绘图 activity 按绘图逻辑拆为三个独立服务、独立仓库（render2d / imagegen / render3d），genpipe 保留编排与非绘图 activity，决策二重写）
 > 日期：2026-08-22
 > 输入文档：《装修设计 Agent 架构方案》（现 V1.3，下称 **Agent 方案**）、《AI装修效果图产品·技术架构方案》（下称 **技术架构**）、《第一阶段视觉提案与 Prompt 说明》（下称 **视觉提案**）
 > 文档性质：两份基线文档的拼接层。不重复两边已定的内容，只解决"缝"：交互式 Agent 的服务落点、深度设计链路补全、两道门的统一、数据与事件契约映射。
@@ -37,7 +37,7 @@
 flowchart LR
     subgraph supply["内容工厂（供给侧）"]
         ES["estate-svc<br/>户型资产/排产"] --> GP["genpipe-svc<br/>批量生成编排"]
-        GP --> GW["genpipe-worker"]
+        GP --> GW["genpipe-worker<br/>解析/求解/校验"]
         GP --> MC["机检门禁<br/>(consistency/compliance/scorer)"]
         MC --> CT["content-svc<br/>公开方案发布"]
         TW["模板验收台<br/>(admin-bff，设计时)"] -.模板上线.-> GP
@@ -45,8 +45,16 @@ flowchart LR
     subgraph demand["交互设计引擎（需求侧）"]
         CH["channel-svc<br/>IM渠道网关(可插拔)"] --> DS["design-svc<br/>Orchestrator/ProjectState"]
         CB["c-bff<br/>H5指图时刻"] --> DS
-        DS --> GW
+        DS --> GP
     end
+    subgraph render["绘图服务（V1.4：独立仓/独立部署，两台引擎复用）"]
+        R2["render2d-svc<br/>确定性2D制图"]
+        IG["imagegen-svc<br/>生成式图像"]
+        R3["render3d-svc<br/>三维渲染"]
+    end
+    GP --> R2
+    GP --> IG
+    GP --> R3
     CT -- "认领即分叉" --> DS
     DS -- "排产信号" --> ES
     DS -- "交付与召回" --> CH
@@ -71,7 +79,7 @@ flowchart LR
 - **故障域独立**：设计会话挂掉不应影响内容消费（content）和资金路径（trade）；反之内容工厂排产高峰不应挤占用户会话。
 - **团队所有权独立**：AI 团队所有，与 genpipe 同队但生命周期不同——genpipe 是"把东西算出来"的管线，design-svc 是"这个家该怎么设计"的状态与决策。
 
-**边界一句话：design-svc 管状态和决策，genpipe 管算力和管线。** design-svc 不跑重计算（解析、布局、渲染全部下发 genpipe activities）；genpipe 不持有项目状态（算完即焚，结果写回 design-svc）。
+**边界一句话：design-svc 管状态和决策，genpipe 管编排和管线，绘图服务管画图算力（V1.4，见 §三）。** design-svc 不跑重计算（解析、布局下发 genpipe activities，绘图下发三个独立绘图服务的 activities，均经 Temporal 工作流）；genpipe 与绘图服务均不持有项目状态（算完即焚，结果写回 design-svc）。
 
 ### 2.2 Agent 方案概念 → 技术组件映射
 
@@ -82,7 +90,7 @@ flowchart LR
 | ProjectState（§7） | `svc_design` schema，见 §5.1 表结构 |
 | 确认闭环（§8.2） | workflow 节点 + c-bff 看图点错交互；确认动作回 signal |
 | 结构化 Patch（§11） | design-svc patch 引擎：校验（调 genpipe 规则 activity）→ 写新 revision → outbox 发事件 → 触发受影响产物重算 |
-| 交付图集 / 模板库（§4、§10） | genpipe activities（见 §3.1），design-svc 传入 PreliminaryPlan Revision + 模板声明，产物注册回 ArtifactRegistry |
+| 交付图集 / 模板库（§4、§10） | genpipe 编排 + 绘图服务 activities（见 §3.1），design-svc 传入 PreliminaryPlan Revision + 模板声明，产物注册回 ArtifactRegistry |
 | Scene Graph（§6.3） | `svc_design.scenes`（JSONB）+ OSS 场景包（编译产物，如 glTF），见 §3.2 |
 
 ### 2.3 交互通道与延迟形态
@@ -95,24 +103,42 @@ flowchart LR
 
 ---
 
-## 三、决策二：深度设计链路补全（不新增服务，扩展 genpipe + estate）
+## 三、决策二（V1.4 重写）：深度设计链路 = genpipe 编排 + 三个独立绘图服务
 
-### 3.1 genpipe activities 扩展清单
+### 3.0 V1.4 裁决：绘图能力物理拆分
 
-深度设计链路的计算全部是"批量、弹性、可重试"形态，与 genpipe-worker 伸缩轴一致，**不新建渲染服务**，扩展 activity 类型：
+原 V1.0–V1.3 口径为"不新建渲染服务，绘图全部收进 genpipe-worker"。**2026-08-23 用户裁决推翻**：绘图逻辑完全异质的能力必须物理隔离（独立仓库 + 独立服务）——无物理隔离的模块边界在长期开发中必然腐烂，此为多次验证的历史经验；构建级门禁（package 边界 + import-linter）不作为物理隔离的替代。
 
-| activity | 说明 | 两台引擎复用 |
-|---|---|---|
-| floorplan-parse | 户型图解析（备用路径） | 工厂建库 / 交互上传，同一实现 |
-| plan-layout-solve | 自动布局与尺寸计算（确定性求解） | 复用 |
-| plan-rule-check | 空间规则校验（碰撞/通道/边界闭合） | 复用 |
-| plan-2d-render | 母版与确定性图层绘制：确认底图、功能说明图、风格图几何底图；同时输出房间遮罩/墙体图层 | 复用 |
-| atmosphere-visual | 风格化交付图生成（模板库驱动，固定遮罩） | 复用 |
-| scene-compile | DeepDesign → Scene Graph → 场景包编译 | 交互引擎专用 |
-| base-render | 三维底渲（几何/深度/线稿/遮罩输出） | 交互引擎专用 |
-| realism-pass | 生成式写实化 | 复用（工厂效果图同用） |
-| consistency-check | 户型与跨视角一致性校验 | 复用 |
-| compliance-check | 内容安全（既有 stage） | **两条路径都强制**：系统无人审环节，合规机检更不豁免 |
+拆分粒度按**绘图逻辑/图片特性**分组，组内逻辑同质、跨组逻辑异质：
+
+| 服务 | 仓库 | 承接 activity | 绘图逻辑 | 算力形态 |
+|---|---|---|---|---|
+| `render2d-svc` | `ishome-render2d` | plan-2d-render | 确定性几何绘制（母版/确认底图/图层/遮罩） | CPU |
+| `imagegen-svc` | `ishome-imagegen` | atmosphere-visual、realism-pass | 生成式图像（扩散模型：模板驱动风格化、写实化） | 外部模型 API / GPU 推理 |
+| `render3d-svc` | `ishome-render3d` | scene-compile、base-render | 三维场景编译与底渲（几何/深度/线稿/遮罩） | GPU + 三维引擎重依赖 |
+
+服务存在性判据逐服务作答：三者**伸缩轴各自独立**（CPU 批量 / API 配额与 GPU 推理 / GPU 渲染），**故障域独立**（依赖栈互不传染，一类图挂不影响另两类出图），所有权同为 AI 团队但发布节奏随各自技术栈独立。
+
+### 3.1 集成形态与 activity 归属
+
+- **genpipe-svc 职责不变**：Temporal workflow 编排、发布门禁状态机，两台引擎的生成链路仍由 genpipe workflow 串起（上层聚合）。
+- **绘图服务 = 独立部署的 Temporal worker 服务**：各自监听专属 task queue（`render2d` / `imagegen` / `render3d`），无对外 RPC 端口、无数据库 schema、无状态（算完即焚，产物写 OSS + 注册 ArtifactRegistry）。重试/心跳/取消/背压沿用 Temporal activity 原生语义，**不引入服务间 HTTP 调用**。
+- **genpipe-worker 保留非绘图 activity**：解析、求解、校验、门禁与 3D 资产加工。
+- **契约**：绘图 activity 注册名与输入输出 schema 在 ishome-contracts activity 注册表版本化管理（既有机制），跨仓接口变更走 contracts 发版流程。
+- 工厂线/交互线**复用同一实现**的原则不变（复用落在服务级）。
+
+| activity | 归属 | 说明 | 两台引擎复用 |
+|---|---|---|---|
+| floorplan-parse | genpipe-worker | 户型图解析（备用路径） | 工厂建库 / 交互上传，同一实现 |
+| plan-layout-solve | genpipe-worker | 自动布局与尺寸计算（确定性求解） | 复用 |
+| plan-rule-check | genpipe-worker | 空间规则校验（碰撞/通道/边界闭合） | 复用 |
+| plan-2d-render | **render2d-svc** | 母版与确定性图层绘制：确认底图、功能说明图、风格图几何底图；同时输出房间遮罩/墙体图层 | 复用 |
+| atmosphere-visual | **imagegen-svc** | 风格化交付图生成（模板库驱动，固定遮罩） | 复用 |
+| scene-compile | **render3d-svc** | DeepDesign → Scene Graph → 场景包编译 | 交互引擎专用 |
+| base-render | **render3d-svc** | 三维底渲（几何/深度/线稿/遮罩输出） | 交互引擎专用 |
+| realism-pass | **imagegen-svc** | 生成式写实化 | 复用（工厂效果图同用） |
+| consistency-check | genpipe-worker | 户型与跨视角一致性校验 | 复用 |
+| compliance-check | genpipe-worker | 内容安全（既有 stage） | **两条路径都强制**：系统无人审环节，合规机检更不豁免 |
 
 **渲染分两档写进 activity 参数**：`preview`（快速低质，供会话内迭代和 Patch 后的即时反馈）与 `final`（正式出图）。V1.1 §13 的失效传播若每次都触发 final 档，成本和延迟都会失控——失效后默认只重算 preview，final 由用户显式请求或交付节点触发。
 
@@ -197,7 +223,7 @@ svc_design.outbox              # 本地事务 + outbox（对齐 2.6 纪律）
 - OpenAPI：c-bff 新增 design 相关端点（snake_case 端到端纪律不变）。
 - 事件 schema：上表 CloudEvents 全部入注册表。
 - 错误码域：`DESIGN_xxx`。
-- monorepo 变化：`aipipe/` 从 `orchestrator、workers…` 调整为 `services/{genpipe-svc, genpipe-worker, design-svc}` + `packages/{scoring, adapters, patch-engine}`。
+- monorepo 变化：`aipipe/` 从 `orchestrator、workers…` 调整为 `services/{genpipe-svc, genpipe-worker, design-svc}` + `packages/{scoring, adapters, patch-engine}`。**V1.4 追加**：绘图 activity 不在 aipipe 内——`ishome-render2d` / `ishome-imagegen` / `ishome-render3d` 三个独立仓库各承载一个绘图服务（见 §三），aipipe 中既有绘图 activity 存根迁出。
 
 ---
 
@@ -329,7 +355,7 @@ IM 输入比表单脏得多：语音、连发多条、混合意图、转发的�
 1. §5 Domain Tools 表补充物理落点列（本对齐文档 §2.2、§3.1 的映射）。
 2. §5.2 Intent Router 前置输入归一化层（语音转文字、多消息聚合），应对 IM 输入形态。
 3. §13 失效传播补充渲染两档规则：失效默认重算 preview 档，final 档按显式请求。
-4. §16 待定项中"三维基础渲染与生成式写实化的技术组合"收敛为：Temporal + genpipe activities（scene-compile / base-render / realism-pass / consistency-check），剩余待定缩小为 realism-pass 的具体模型选型。
+4. §16 待定项中"三维基础渲染与生成式写实化的技术组合"收敛为：Temporal + genpipe activities（scene-compile / base-render / realism-pass / consistency-check），剩余待定缩小为 realism-pass 的具体模型选型。（**V1.4 更新**：上述绘图 activity 的物理落点改为独立绘图服务，见 §三；Temporal 编排结论不变。）
 5. §4 三张图定义按本文 7.1 修订：严格递进改为模板库组合，母版承担确认底图 + 几何源双职责；§10 ViewSpec 扩为模板库数据结构。
 6. §3.1 阶段一目标节吸收《视觉提案》§2 的心理路径与分享公式作为产品原则。
 
@@ -346,7 +372,7 @@ IM 输入比表单脏得多：语音、连发多条、混合意图、转发的�
 | # | 决策 | 变量 | 影响 |
 |---|---|---|---|
 | ⑤ | ~~首发会话渠道~~ **已决：首发 = 飞书**（§6.7）。残留：微信系渠道的接入时机与组合（企微 vs 微信客服 vs 公众号） | C 端增长启动时间 × 各通道届时的自动化消息规则（接入前核实） | 第二批 adapter；AI 直发与"AI 起草+设计师发出"的比例 |
-| ⑥ | 渲染算力供给：纯外部模型 API vs 自建 GPU 池 | 单图成本（Langfuse 数据）× 出图量预测 | genpipe-worker 伸缩设计与毛利模型 |
+| ⑥ | 渲染算力供给：纯外部模型 API vs 自建 GPU 池 | 单图成本（Langfuse 数据）× 出图量预测 | imagegen-svc / render3d-svc 伸缩设计与毛利模型（V1.4 起可按服务分别拍） |
 | ⑦ | 三维资产库来源：自建 / 采购 / 厂商合作 | 资产量级、版权、SKU 关联深度 | catalog 建设节奏；深度设计链路最大外部依赖 |
 | ⑧ | ~~结构复核的设计师供给与 SLA~~ **V1.3 作废**：系统无结构复核环节（硬证据机检 + 户型库结构数据沉淀） | — | — |
 | ⑨ | ~~真人接管方案~~ **V1.3 作废**：系统无转人工（`human_takeover` 仅作渠道属性描述保留在契约中，产品不使用） | — | — |
@@ -356,4 +382,4 @@ IM 输入比表单脏得多：语音、连发多条、混合意图、转发的�
 
 ## 十、一句话总结
 
-> 内容工厂负责把户型库填满（供给），design-svc 负责把命中的用户接进私有设计项目（需求），channel-svc 让这场设计对话发生在用户已经在的任何 IM 里；两边共用 genpipe 的算力管线、Temporal 的编排、同一套机检门禁和同一套事件契约。运行时无任何人工环节——用户侧收集并确认信息，其余全部靠系统迭代。新增一个服务、升格一个服务、零个新中间件，其余全部是既有组件的复用与扩展。
+> 内容工厂负责把户型库填满（供给），design-svc 负责把命中的用户接进私有设计项目（需求），channel-svc 让这场设计对话发生在用户已经在的任何 IM 里；两边共用 genpipe 的编排管线、三个独立绘图服务的画图算力（render2d/imagegen/render3d，V1.4 物理拆分）、Temporal 的编排、同一套机检门禁和同一套事件契约。运行时无任何人工环节——用户侧收集并确认信息，其余全部靠系统迭代。新增四个服务（design + 三绘图）、升格一个服务、零个新中间件，其余全部是既有组件的复用与扩展。
