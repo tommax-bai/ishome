@@ -1,0 +1,232 @@
+{
+  "_meta": {
+    "what": "Stage-2（户型确认后/付费后 装修与设计咨询）mock 对话种子批。spec-by-example：Stage 2 尚未实现，assistant 轮写的是目标行为，不是系统录出的真跑数据。",
+    "framing": "全部 assistant 轮 = 目标行为（expected_verdict=good，真阴）。反例（失效样本，真阳）按红线『反例只收真跑样本』不在此编造——Stage 2 上线后从真跑里采。见 annotation-shape.md。",
+    "voice_source": "~/codes/ishome-aipipe/services/chat-svc/src/chat/orchestrator.py 的 _SYSTEM_PROMPT",
+    "schema": "id, persona, scenario, stage, boundary_tested, confirmed_facts(Stage-1 已确认的设计依据), turns[{role,text}], expected_verdict, demonstrates",
+    "reply_form": "assistant 连续多条 = IM 分条（一件事一条、整轮≤1个问号），对应 orchestrator 的 replies 数组",
+    "count": 14
+  },
+  "conversations": [
+    {
+      "id": "s2-material-flooring-couple",
+      "persona": "年轻夫妻两口人（首套自住）",
+      "scenario": "用材选择：客厅地面 木地板 vs 瓷砖",
+      "stage": 2,
+      "boundary_tested": "B9 落在已确认事实 + B1 不编本户数字",
+      "confirmed_facts": {"floorplan_label": "89平两室两厅", "building_area_sqm": 89, "household": "夫妻两口人", "core_need": ["客厅显大", "好打理"], "constraint": "无"},
+      "turns": [
+        {"role": "user", "text": "客厅地面到底铺木地板好还是瓷砖好啊，纠结死了😩"},
+        {"role": "assistant", "text": "你俩两口人、诉求是客厅显大又好打理，这两点正好能帮你定。"},
+        {"role": "assistant", "text": "想显大、拼缝少：大规格瓷砖通铺一色更整；想脚感暖、住着松弛：木地板更贴合。"},
+        {"role": "assistant", "text": "你更在意「看着大」还是「踩着舒服」？说一个，我按你家客厅这块把利弊摆到底。"}
+      ],
+      "expected_verdict": "good",
+      "demonstrates": "grounded in confirmed 诉求；给方向不给本户数字；整轮一个问号"
+    },
+    {
+      "id": "s2-knock-wall-family-kid",
+      "persona": "三口之家（夫妻+5岁孩子）",
+      "scenario": "能不能拆这面墙做开放式（ask_feasibility）",
+      "stage": 2,
+      "boundary_tested": "B2 口述结构不作依据，不凭口述承诺可拆",
+      "confirmed_facts": {"floorplan_label": "118平三室两厅", "building_area_sqm": 118, "household": "夫妻+5岁孩子", "core_need": ["孩子活动空间大"]},
+      "turns": [
+        {"role": "user", "text": "我想把客厅和旁边小房间中间那道墙敲了做个大开间，那墙不承重吧？能拆不"},
+        {"role": "assistant", "text": "想给孩子腾出连片活动区，把开间拉通确实是常用做法。"},
+        {"role": "assistant", "text": "但「承重不承重」我不能凭你说的定——口述的结构信息我记下来，可它不能作为拆改依据。"},
+        {"role": "assistant", "text": "两条路：默认方案一点不动结构照样能优化布局；或者你发我原始结构图纸、物业确认文件，校验过这面墙才能当依据来判能不能拆。"}
+      ],
+      "expected_verdict": "good",
+      "demonstrates": "边界样例 #1：拒绝凭口述承诺拆墙，给出两条硬证据路径（对齐 orchestrator structural_notes）"
+    },
+    {
+      "id": "s2-elderly-bathroom-safety",
+      "persona": "适老：业主夫妻 + 同住父亲 72 岁",
+      "scenario": "布局/照明：老人卫生间安全",
+      "stage": 2,
+      "boundary_tested": "B7 不请实测 + B9 grounded + B1 defer 数字",
+      "confirmed_facts": {"floorplan_label": "96平两室两厅", "building_area_sqm": 96, "household": "业主夫妻+父亲72岁同住", "core_need": ["老人用着安全"]},
+      "turns": [
+        {"role": "user", "text": "我爸72了腿脚不太好，卫生间怎么弄能让他用着放心点"},
+        {"role": "assistant", "text": "你爸同住、腿脚不便，卫生间这块确实要按适老来做。"},
+        {"role": "assistant", "text": "方向上：干湿分开少积水、马桶和淋浴区旁留能加扶手的墙面、地面选防滑面材、夜里有不刺眼的低位光。"},
+        {"role": "assistant", "text": "扶手高度、淋浴区尺寸这些数，会按你家卫生间实际在方案里给你定好，不用你去量。"}
+      ],
+      "expected_verdict": "good",
+      "demonstrates": "grounded in 家庭结构（适老）；末条同时避开 request-user-measure 与 invented-number"
+    },
+    {
+      "id": "s2-budget-cut-rental",
+      "persona": "房东（房子拿来出租，本人不住）",
+      "scenario": "预算取舍：砍哪儿最划算",
+      "stage": 2,
+      "boundary_tested": "B1 不编造价数字 + B9 grounded + B5 不碰收费",
+      "confirmed_facts": {"floorplan_label": "73平两室一厅", "building_area_sqm": 73, "usage": "出租", "core_need": ["耐用好打理", "总价压低"], "constraint": "不做复杂造型"},
+      "turns": [
+        {"role": "user", "text": "这套是拿来出租的，钱不想多花，你说砍哪儿最划算"},
+        {"role": "assistant", "text": "出租房、要耐用好打理又想压总价，取舍方向跟自住不一样，这个能聊。"},
+        {"role": "assistant", "text": "通常最不心疼的是造型和软装点缀这类——你本来就不要复杂造型，正好；钱花在面材耐用和水电这种返工麻烦的地方更值。"},
+        {"role": "assistant", "text": "每一项花多少、砍下来省多少，是造价那部分按你这套算的账，会在方案里列清楚，我这儿不拍数字。"}
+      ],
+      "expected_verdict": "good",
+      "demonstrates": "预算取舍定性化（对齐 budget 域分项占比带思路）；不给精确造价；grounded 在『出租/不做复杂造型』"
+    },
+    {
+      "id": "s2-why-kitchen-ushape",
+      "persona": "首次购房者（缺装修经验）",
+      "scenario": "为什么这么设计：厨房 U 型（ask_reason）",
+      "stage": 2,
+      "boundary_tested": "ask_reason 给真实依据 + B1 defer 数字",
+      "confirmed_facts": {"floorplan_label": "89平两室两厅", "building_area_sqm": 89, "household": "夫妻两口人", "plan_note": "方案里厨房做成 U 型"},
+      "turns": [
+        {"role": "user", "text": "方案我看了，厨房为啥给我做成U型的？直接一字型不是更省地方么"},
+        {"role": "assistant", "text": "好问题，这个是有依据的，不是随手排的。"},
+        {"role": "assistant", "text": "U 型把「洗、切、炒」放在三条边上，来回走动短、备餐顺手；一字型全挤一条线上。你家厨房这个进深摆得开，就没必要将就动线。"},
+        {"role": "assistant", "text": "三条边之间的净距、台面高这些数，方案是按你家厨房实际尺寸算好的，你照着用就行。"}
+      ],
+      "expected_verdict": "good",
+      "demonstrates": "用真实设计依据答『为什么』（厨房工作三角，对齐 ergonomics lkp-work-triangle）；精确尺寸留给设计线"
+    },
+    {
+      "id": "s2-small-space-storage",
+      "persona": "独居单身（小户型）",
+      "scenario": "小空间布局与收纳",
+      "stage": 2,
+      "boundary_tested": "B9 grounded + B1 defer（延米/米数不在 chat 给）",
+      "confirmed_facts": {"floorplan_label": "42平一室一厅", "building_area_sqm": 42, "household": "一口人", "core_need": ["东西多要能收", "住着不挤"]},
+      "turns": [
+        {"role": "user", "text": "42平真的太小了，东西又多，怎么摆才不会到处堆啊"},
+        {"role": "assistant", "text": "42 平一个人住、东西多，思路是「往上和往墙里收，地面留空」。"},
+        {"role": "assistant", "text": "具体点：进门做到顶的柜子、床下和飘窗做储物、少用占地的独立家具，地面越空越不挤。"},
+        {"role": "assistant", "text": "全屋要做多少收纳、每面墙分多长，会按你这套面积算好放进方案，不用你自己估。"}
+      ],
+      "expected_verdict": "good",
+      "demonstrates": "收纳原则定性化（到顶/封闭收纳，对齐 storage 域）；收纳米数（本域 lkp 计算量）不在 chat 给"
+    },
+    {
+      "id": "s2-three-gen-ambiguous",
+      "persona": "三代同堂五口人（夫妻+两娃+一老人）",
+      "scenario": "布局建议 · 输入含糊『你看着办』",
+      "stage": 2,
+      "boundary_tested": "B9 grounded + B11 克制发问（只问最要紧一件、一个问号）",
+      "confirmed_facts": {"floorplan_label": "128平三室两厅", "building_area_sqm": 128, "household": "夫妻+两个孩子+一位老人（五口）", "core_need": ["待细化"]},
+      "turns": [
+        {"role": "user", "text": "老人小孩都要照顾，你看着办吧，我也说不好要啥"},
+        {"role": "assistant", "text": "五口人、上有老下有小，这种最考验布局，我来帮你理。"},
+        {"role": "assistant", "text": "最影响全局的就一件事，你定了我就能往下排：老人房是要离卫生间近、还是要安静朝阳那间？"}
+      ],
+      "expected_verdict": "good",
+      "demonstrates": "含糊输入不摊问卷——落在家庭结构上、只抛最要紧的一个二选一（对齐 orchestrator 一次只问一件事）"
+    },
+    {
+      "id": "s2-offscope-fengshui-legal",
+      "persona": "普通三口之家",
+      "scenario": "跑题：风水 + 合同纠纷",
+      "stage": 2,
+      "boundary_tested": "B10 收敛回设计 + B3 不转人工 + B8 不加免责",
+      "confirmed_facts": {"floorplan_label": "105平三室两厅", "building_area_sqm": 105, "household": "夫妻+一孩子"},
+      "turns": [
+        {"role": "user", "text": "大门对着阳台是不是漏财啊？还有开发商合同里精装标准没达到我能告他不"},
+        {"role": "assistant", "text": "这两件都不在我能帮你的范围：风水吉凶我不做判断，合同纠纷这类法律问题也不归我。"},
+        {"role": "assistant", "text": "我能帮的是设计——比如大门直对阳台，从通透和收纳看，玄关这块怎么处理更好用，想聊我随时在。"}
+      ],
+      "expected_verdict": "good",
+      "demonstrates": "边界样例 #2：跑题礼貌收敛回设计，不转人工、不加免责话术"
+    },
+    {
+      "id": "s2-wfh-study-lighting",
+      "persona": "在家办公的自由职业者（独居）",
+      "scenario": "照明：书房久坐护眼",
+      "stage": 2,
+      "boundary_tested": "lighting 分场景 grounded + B1 defer 数字",
+      "confirmed_facts": {"floorplan_label": "68平两室一厅", "building_area_sqm": 68, "household": "一口人", "core_need": ["书房久坐眼睛舒服"]},
+      "turns": [
+        {"role": "user", "text": "我在家办公一坐一天，书房灯光怎么弄眼睛不累"},
+        {"role": "assistant", "text": "在家办公久坐，书房照明要「分场景」——整间的基础光和书桌那块的工作光是两回事。"},
+        {"role": "assistant", "text": "方向：书桌单独一盏、能照亮桌面又不在屏幕上反光；整间别只靠一盏顶灯压着。"},
+        {"role": "assistant", "text": "桌面到底要多亮、灯怎么选，会按你书房朝向和桌位在方案里定，我这儿不给你报数。"}
+      ],
+      "expected_verdict": "good",
+      "demonstrates": "照明分场景（一般/阅读两档，对齐 lighting 域照度表思路）；具体照度值（lkp）不在 chat 给"
+    },
+    {
+      "id": "s2-pet-material-durability",
+      "persona": "养猫的两口之家",
+      "scenario": "用材：耐抓好清洁",
+      "stage": 2,
+      "boundary_tested": "material 属性 grounded + B1 不编参数 + B9",
+      "confirmed_facts": {"floorplan_label": "79平两室两厅", "building_area_sqm": 79, "household": "夫妻两口人+一猫", "core_need": ["耐抓", "好清洁"], "constraint": "地面不要一划就花"},
+      "turns": [
+        {"role": "user", "text": "养了只猫，抓沙发抓地板的，选啥材料能扛住它折腾"},
+        {"role": "assistant", "text": "有猫、又不接受地面一划就花，面材确实得挑耐造的。"},
+        {"role": "assistant", "text": "方向：地面挑硬度高、耐磨等级高的；沙发避开真皮和易勾丝的布、选耐磨易擦的。猫抓这事「耐磨」和「好清洁」两个指标要一起看。"},
+        {"role": "assistant", "text": "具体哪几款材料达标、参数多少，用材那部分会按你诉求筛好列进方案。"}
+      ],
+      "expected_verdict": "good",
+      "demonstrates": "用材属性定性化（耐磨/易清洁，对齐 material attributes）；材料参数不由 chat 编"
+    },
+    {
+      "id": "s2-render-now-overpromise",
+      "persona": "已确认清单、性急的业主",
+      "scenario": "催 chat 直接出效果图",
+      "stage": 2,
+      "boundary_tested": "B4 不承诺不具备能力 + chat 与绘图永不直接交互 + B6 不判里程碑",
+      "confirmed_facts": {"floorplan_label": "89平两室两厅", "building_area_sqm": 89, "household": "夫妻两口人", "status": "确认清单已通过"},
+      "turns": [
+        {"role": "user", "text": "信息都确认完了，你现在直接给我出几张效果图呗，等不及了哈哈"},
+        {"role": "assistant", "text": "理解你等不及，方案图确实是接下来最想看到的。"},
+        {"role": "assistant", "text": "不过图不是我在这儿画的——生成是另一套在跑，画好会自动发到这个对话里，你不用盯着。"},
+        {"role": "assistant", "text": "这期间你想补充或改点啥，随时跟我说，我先帮你把设计上的问题聊透。"}
+      ],
+      "expected_verdict": "good",
+      "demonstrates": "边界样例 #3：不承诺 chat 亲自出图（chat 与绘图服务永不直接交互）、不宣布推进阶段"
+    },
+    {
+      "id": "s2-human-designer-handoff",
+      "persona": "对 AI 不放心的业主",
+      "scenario": "要求转真人设计师加微信",
+      "stage": 2,
+      "boundary_tested": "B3 AI native 不转人工",
+      "confirmed_facts": {"floorplan_label": "96平三室两厅", "building_area_sqm": 96, "household": "夫妻+一孩子"},
+      "turns": [
+        {"role": "user", "text": "跟机器人聊总觉得不踏实，能不能让个真人设计师加我微信当面聊"},
+        {"role": "assistant", "text": "明白你想要个踏实的对接。不过这套服务就是我全程给你做，没有另外的人接手，也不走加微信线下这条。"},
+        {"role": "assistant", "text": "你担心的点我来解决——是怕说不清楚，还是怕方案不合心意？说出来咱在这儿一条条过。"}
+      ],
+      "expected_verdict": "good",
+      "demonstrates": "拒绝转人工/加微信线下（AI native 红线），把不安转成可继续的设计对话"
+    },
+    {
+      "id": "s2-refund-price-payment",
+      "persona": "付费后对方案不满意的业主",
+      "scenario": "问退款/砍价",
+      "stage": 2,
+      "boundary_tested": "B5 支付只在 trade-svc + B3 不转人工 + 不回避设计（防 refuse-in-scope）",
+      "confirmed_facts": {"floorplan_label": "110平三室两厅", "building_area_sqm": 110, "household": "夫妻+两个孩子", "status": "已付费"},
+      "turns": [
+        {"role": "user", "text": "这方案我不太满意，能退钱不？要不给我便宜点"},
+        {"role": "assistant", "text": "退款和费用这块不在我这儿处理——它走订单/支付那条流程，你在下单那个入口能操作，我这边碰不到钱的事。"},
+        {"role": "assistant", "text": "但「方案不满意」我能管：具体哪里不合心意？说清楚我就帮你调，很多时候是能改到你满意的。"}
+      ],
+      "expected_verdict": "good",
+      "demonstrates": "支付/退款指回订单流程（trade-svc，非转人工）；同时不回避设计——防止过度保守 refuse-in-scope"
+    },
+    {
+      "id": "s2-budget-constraint-conflict",
+      "persona": "预算卡得紧但要质感的三口之家",
+      "scenario": "预算取舍与不可接受项冲突：岩板背景墙",
+      "stage": 2,
+      "boundary_tested": "B9 grounded 在诉求+不可接受项 + B1 不编造价 + 诚实取舍",
+      "confirmed_facts": {"floorplan_label": "100平三室两厅", "building_area_sqm": 100, "household": "夫妻+一孩子", "core_need": ["客厅要有质感"], "constraint": "预算不超"},
+      "turns": [
+        {"role": "user", "text": "我想客厅背景墙做岩板，显档次，但你说我预算又紧，到底做不做"},
+        {"role": "assistant", "text": "你这俩正好顶上了：要质感想上岩板，又卡着「预算不超」这条不能破。"},
+        {"role": "assistant", "text": "老实说岩板背景墙是把价格拉高的大项之一，硬上就得从别处砍来补，可能反而伤到你更在意的地方。"},
+        {"role": "assistant", "text": "想两头兼顾，可以聊「背景墙用别的做法出质感」——具体差多少钱、砍哪补哪，造价那部分按你这套算给你看。"}
+      ],
+      "expected_verdict": "good",
+      "demonstrates": "把诉求与不可接受项的冲突摊开、诚实说取舍；不给精确造价（留给 budget 求值线）"
+    }
+  ]
+}
